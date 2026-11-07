@@ -10,15 +10,20 @@ import re
 import sys
 import urllib.parse
 import urllib.request
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).parent
 CLASSES_FILE = ROOT / "classes.md"
 STATE_FILE = ROOT / "state.json"
-API = "https://courses.illinois.edu/cisapp/explorer/schedule"
+SCHEDULE = "https://courses.illinois.edu/schedule"
 BANNER = "https://banner.apps.uillinois.edu/StudentRegistrationSSB/ssb/classRegistration/classRegistration"
 HEADERS = {"User-Agent": "uiuc-seat-watcher/1.0"}
+
+# Matches each section row via its "add to favorites" link, which is the
+# only place the CRN reliably appears next to the section's status icon.
+ROW_RE = re.compile(r"/userredirect/favorite/\d+/\w+/[A-Z]+/\d+/(\d+)")
+STATUS_RE = re.compile(r'aria-label="Section ([^"]+)"')
+LABEL_RE = re.compile(r'type-col dt-body-left">\s*<div class="app-meeting">([^<]+)</div>')
 
 
 def parse_classes():
@@ -41,38 +46,37 @@ def parse_classes():
     return year, season, classes
 
 
-def strip_ns(tag):
-    return tag.rsplit("}", 1)[-1]
-
-
-def fetch_xml(url):
+def fetch_html(url):
     req = urllib.request.Request(url, headers=HEADERS)
     with urllib.request.urlopen(req, timeout=30) as r:
-        return ET.fromstring(r.read())
-
-
-def find_text(el, name):
-    for child in el.iter():
-        if strip_ns(child.tag) == name and child.text:
-            return child.text.strip()
-    return None
+        return r.read().decode()
 
 
 def get_sections(year, season, subj, num):
-    """Return {crn: (status, label)} for every section of a course."""
-    root = fetch_xml(f"{API}/{year}/{season}/{subj}/{num}.xml?mode=detail")
+    """Return {crn: (status, label)} for every section of a course.
+
+    Course Explorer's XML API no longer reports enrollment status (every
+    section just comes back "A" for active, open or not), so this scrapes
+    the human-facing schedule page instead, which still shows a real
+    Open/Closed/Open (Restricted) icon per section.
+    """
+    html = fetch_html(f"{SCHEDULE}/{year}/{season}/{subj}/{num}")
     out = {}
-    for el in root.iter():
-        if strip_ns(el.tag) in ("detailedSection", "section") and el.get("id"):
-            status = find_text(el, "enrollmentStatus") or "UNKNOWN"
-            label = find_text(el, "sectionNumber") or el.get("id")
-            out[el.get("id")] = (status, label)
+    for m in ROW_RE.finditer(html):
+        crn = m.group(1)
+        before = html[max(0, m.start() - 1500):m.start()]
+        statuses = STATUS_RE.findall(before)
+        status = statuses[-1] if statuses else "UNKNOWN"
+        after = html[m.end():m.end() + 1500]
+        label_m = LABEL_RE.search(after)
+        label = label_m.group(1).strip() if label_m else crn
+        out[crn] = (status, label)
     return out
 
 
 def is_open(status):
     s = status.lower()
-    return s.startswith("open") or s == "crosslistopen"
+    return s.startswith("open") or s.startswith("crosslistopen")
 
 
 def send_whatsapp(msg):
