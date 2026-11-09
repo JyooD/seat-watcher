@@ -12,7 +12,6 @@ Delete a line (or the whole bullet) once you're registered.
 
 ## Watching
 
-- ECON 414 12345   # example, replace with your real CRN
 - ECON 437 69366
 - ECON 460 69371
 - ECON 469 62226

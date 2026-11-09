@@ -78,3 +78,40 @@ Delete a line once you're registered for it so it stops checking.
   won't cause a false alert.
 - **CRN not found**: double-check the CRN in `classes.md` against the course
   catalog — it's specific to the term listed at the top of that file.
+
+## Reliable 15-minute checks (cron-job.org)
+
+GitHub's own schedule often runs only every few hours on small repos, so an
+outside timer triggers the workflow instead. GitHub's schedule stays on as an
+hourly-ish backup.
+
+1. **Make a token**: GitHub → Settings → Developer settings → Fine-grained tokens →
+   Generate new token.
+   - Repository access: *Only select repositories* → `seat-watcher`
+   - Permissions: **Actions → Read and write** (nothing else)
+   - Expiration: past the end of registration (e.g. 90 days)
+2. **Create the cron job** at https://cron-job.org (free account):
+   - URL: `https://api.github.com/repos/JyooD/seat-watcher/actions/workflows/watch.yml/dispatches`
+   - Schedule: every 15 minutes
+   - Advanced → Request method: **POST**
+   - Headers:
+     - `Authorization: Bearer <your token>`
+     - `Accept: application/vnd.github+json`
+     - `X-GitHub-Api-Version: 2022-11-28`
+   - Request body: `{"ref":"master"}`
+   - Turn on cron-job.org's "notify me when execution fails" email.
+3. Click **Test run**. It should return status **204**, and a new run should appear
+   under Actions within a few seconds.
+
+## Safeguards
+
+- **Daily check-in**: the first run after 9am (Chicago) each day sends a WhatsApp
+  with every section's status and how many checks ran in the last 24h (~96 expected).
+  **No check-in by ~9:30am = something is broken.** Check cron-job.org and Actions.
+- **Problem alerts**: if a class can't be looked up, a CRN isn't found, or a status
+  comes back UNKNOWN, the run turns red (GitHub emails you) and you get one WhatsApp
+  warning per day.
+- **WhatsApp failures**: if CallMeBot rejects a message, the run turns red instead of
+  passing silently.
+- **Token expiry**: when the token expires, cron-job.org starts failing (it emails you)
+  and the check-ins slow to the GitHub backup rate. Make a new token and update the header.

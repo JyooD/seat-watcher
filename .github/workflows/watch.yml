@@ -1,8 +1,11 @@
 name: Seat watcher
 
+# Main trigger: cron-job.org calls the "run workflow" API every 15 minutes
+# (see README). GitHub's own schedule below is only a slow backup, since
+# GitHub often delays scheduled runs by hours on small repos.
 on:
   schedule:
-    - cron: "*/10 * * * *"   # every 10 min (GitHub may run it a few minutes late)
+    - cron: "7 * * * *"
   workflow_dispatch:
     inputs:
       test_message:
@@ -12,6 +15,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: seat-watcher
@@ -30,11 +34,16 @@ jobs:
         env:
           WHATSAPP_PHONE: ${{ secrets.WHATSAPP_PHONE }}
           CALLMEBOT_APIKEY: ${{ secrets.CALLMEBOT_APIKEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TEST_MESSAGE: ${{ inputs.test_message }}
         run: python watcher.py
       - name: Save state
+        if: always()
         run: |
           git config user.name "seat-watcher"
           git config user.email "seat-watcher@users.noreply.github.com"
           git add state.json 2>/dev/null || exit 0
-          git diff --cached --quiet || (git commit -m "Update seat state" && git push)
+          git diff --cached --quiet && exit 0
+          git commit -m "Update seat state"
+          git pull --rebase -X theirs || true
+          git push
