@@ -1,7 +1,8 @@
 # UIUC Seat Watcher
 
 A tiny bot that watches UIUC [Course Explorer](https://courses.illinois.edu/)
-for you and pings your WhatsApp the moment a full section opens up, so you
+for you and sends a push notification to your phone (via
+[ntfy](https://ntfy.sh)) the moment a full section opens up, so you
 don't have to keep refreshing Banner during registration week. It runs for
 free on GitHub Actions, on a schedule, with no server to maintain.
 
@@ -9,31 +10,31 @@ You still have to register yourself — this only tells you *when* to.
 
 ## How it works
 
-- `watcher.py` reads the courses you're watching from `classes.md`, queries
-  the Course Explorer API for each one, and compares the current enrollment
+- `watcher.py` reads the courses you're watching from `classes.md`, reads
+  each course's page on Course Explorer, and compares the current enrollment
   status against the last known status, which it keeps in `state.json`.
-- If a section flips from closed to open, it sends you one WhatsApp message
-  via [CallMeBot](https://www.callmebot.com/) and remembers that it already
-  alerted you, so you don't get spammed every 10 minutes while the seat
-  stays open.
+- If a section flips from closed to open, `notify.py` sends you one urgent
+  push notification (tap it to open registration) and the watcher remembers
+  that it already alerted you, so you don't get spammed every run while the
+  seat stays open.
 - `.github/workflows/watch.yml` is a GitHub Actions workflow that runs
-  `watcher.py` on a schedule (every ~10 minutes), passing your phone number
-  and API key in as secrets, and commits the updated `state.json` back to
+  `watcher.py` every 15 minutes, passing your ntfy topic in as a secret, and commits the updated `state.json` back to
   the repo so state persists between runs.
 
-## Setup (one time, ~10 min)
+## Setup (one time, ~5 min)
 
-1. **Get a WhatsApp API key (CallMeBot, free)**
-   - Add **+34 644 66 32 62** to your phone contacts.
-   - Send it this WhatsApp message: `I allow callmebot to send me messages`
-   - It replies with your API key. Save it somewhere.
+1. **Install ntfy (free, no account)**
+   - Install the **ntfy** app from the App Store or Google Play and allow
+     notifications.
+   - Tap **+** / *Subscribe to topic* and make up a long random topic name,
+     e.g. `jae-seats-8f3k2q`. Anyone who knows the name can read it, so don't
+     use something guessable.
 2. **Push this folder to a GitHub repo** (private is fine).
-3. **Add two repository secrets**: repo → Settings → Secrets and variables →
+3. **Add one repository secret**: repo → Settings → Secrets and variables →
    Actions → New repository secret
-   - `WHATSAPP_PHONE` — your number with country code, e.g. `+12175551234`
-   - `CALLMEBOT_APIKEY` — the key from step 1
+   - `NTFY_TOPIC` — the topic name from step 1 (just the name, no URL)
 4. **Test it**: repo → Actions → Seat watcher → Run workflow → check "Send a
-   test WhatsApp message" → Run. You should get a message within a minute.
+   test notification" → Run. Your phone should buzz within a few seconds.
    If nothing arrives, see Troubleshooting below.
 5. **Add the classes you're watching** — see below — and commit.
 
@@ -53,7 +54,7 @@ Edit `classes.md` (you can do it right on github.com) and add lines under
   alerts on any of them.
 - Anything after `#` on a line is a note and is ignored.
 
-Commit the change, and the next scheduled run (within ~10 min) picks it up.
+Commit the change, and the next run (within ~15 min) picks it up.
 Delete a line once you're registered for it so it stops checking.
 
 ## Notes
@@ -70,9 +71,11 @@ Delete a line once you're registered for it so it stops checking.
 
 ## Troubleshooting
 
-- **No test message arrives**: double check `WHATSAPP_PHONE` includes the
-  `+` and country code, and that you messaged CallMeBot's number from the
-  *same* WhatsApp account/number you put in the secret.
+- **No test notification arrives**: check that `NTFY_TOPIC` matches the topic
+  you subscribed to in the app exactly (it's case-sensitive), and that
+  notifications are allowed for ntfy in your phone's settings. On iPhone,
+  turn off Focus/Do Not Disturb or allow ntfy through it.
+- **Test locally**: `NTFY_TOPIC=your-topic python notify.py "hello"`.
 - **Workflow run shows a lookup failed**: Course Explorer was likely
   temporarily down or slow; the watcher keeps last-known state so this
   won't cause a false alert.
@@ -105,13 +108,13 @@ hourly-ish backup.
 
 ## Safeguards
 
-- **Daily check-in**: the first run after 9am (Chicago) each day sends a WhatsApp
-  with every section's status and how many checks ran in the last 24h (~96 expected).
+- **Daily check-in**: the first run after 9am (Chicago) each day sends a quiet
+  notification with every section's status and how many checks ran in the last 24h (~96 expected).
   **No check-in by ~9:30am = something is broken.** Check cron-job.org and Actions.
 - **Problem alerts**: if a class can't be looked up, a CRN isn't found, or a status
-  comes back UNKNOWN, the run turns red (GitHub emails you) and you get one WhatsApp
+  comes back UNKNOWN, the run turns red (GitHub emails you) and you get one phone
   warning per day.
-- **WhatsApp failures**: if CallMeBot rejects a message, the run turns red instead of
-  passing silently.
+- **Notification failures**: if ntfy can't be reached or rejects a message, the run
+  turns red instead of passing silently.
 - **Token expiry**: when the token expires, cron-job.org starts failing (it emails you)
   and the check-ins slow to the GitHub backup rate. Make a new token and update the header.

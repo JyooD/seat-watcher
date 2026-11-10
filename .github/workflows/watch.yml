@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       test_message:
-        description: "Send a test WhatsApp message instead of checking"
+        description: "Send a test notification instead of checking"
         type: boolean
         default: false
 
@@ -32,8 +32,7 @@ jobs:
           python-version: "3.12"
       - name: Check seats
         env:
-          WHATSAPP_PHONE: ${{ secrets.WHATSAPP_PHONE }}
-          CALLMEBOT_APIKEY: ${{ secrets.CALLMEBOT_APIKEY }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TEST_MESSAGE: ${{ inputs.test_message }}
         run: python watcher.py

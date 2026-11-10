@@ -1,4 +1,4 @@
-"""UIUC seat watcher: checks Course Explorer for open seats and sends a WhatsApp alert.
+"""UIUC seat watcher: checks Course Explorer for open seats and sends a phone alert (ntfy).
 
 Reads classes.md, checks each section's enrollment status, and alerts once when a
 section changes from closed to open. State is kept in state.json so you don't get
@@ -8,11 +8,12 @@ import json
 import os
 import re
 import sys
-import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+import notify
 
 ROOT = Path(__file__).parent
 CLASSES_FILE = ROOT / "classes.md"
@@ -83,21 +84,6 @@ def is_open(status):
     return s.startswith("open") or s.startswith("crosslistopen")
 
 
-def send_whatsapp(msg):
-    """Send a WhatsApp message via CallMeBot. Raises if the send fails."""
-    phone, key = os.environ.get("WHATSAPP_PHONE"), os.environ.get("CALLMEBOT_APIKEY")
-    if not phone or not key:
-        raise RuntimeError("WHATSAPP_PHONE / CALLMEBOT_APIKEY secrets are not set")
-    q = urllib.parse.urlencode({"phone": phone, "text": msg, "apikey": key})
-    req = urllib.request.Request(f"https://api.callmebot.com/whatsapp.php?{q}", headers=HEADERS)
-    with urllib.request.urlopen(req, timeout=30) as r:
-        body = r.read().decode(errors="replace")
-    # CallMeBot often answers HTTP 200 even when it failed, so check the text too.
-    if re.search(r"error|invalid|not (allowed|registered)|wrong", body, re.I):
-        raise RuntimeError(f"CallMeBot rejected the message: {body[:300]}")
-    print("WhatsApp sent")
-
-
 def runs_last_24h():
     """Count this workflow's runs in the last 24h (None if unavailable)."""
     token, repo = os.environ.get("GITHUB_TOKEN"), os.environ.get("GITHUB_REPOSITORY")
@@ -117,7 +103,8 @@ def runs_last_24h():
 
 def main():
     if os.environ.get("TEST_MESSAGE") == "true":
-        send_whatsapp("Seat watcher test: notifications are working.")
+        notify.send("Seat watcher test: notifications are working.",
+                    title="Seat watcher test", tags=["white_check_mark"])
         return
 
     year, season, classes = parse_classes()
@@ -153,7 +140,8 @@ def main():
                 alerts.append(f"{name} sec {label} (CRN {c}) is {status}")
 
     if alerts:
-        send_whatsapp("Seat open!\n" + "\n".join(alerts) + f"\nRegister: {BANNER}")
+        notify.send("\n".join(alerts) + "\nTap to open registration.",
+                    title="Seat open!", priority="urgent", tags=["rotating_light"], click=BANNER)
 
     # Daily heartbeat: first run on/after 9am Chicago time each day.
     now = datetime.now(ZoneInfo("America/Chicago"))
@@ -161,13 +149,13 @@ def main():
     last_hb = state.get("_last_heartbeat")
     if now.hour >= HEARTBEAT_HOUR and last_hb != today:
         runs = runs_last_24h()
-        msg = "Seat watcher daily check-in\n" + ("\n".join(lines) or "(no sections checked)")
+        msg = "\n".join(lines) or "(no sections checked)"
         if runs is not None:
             msg += f"\nChecks in last 24h: {runs} (expect ~{24 * 60 // CHECK_EVERY_MIN})"
         if problems:
             msg += "\nProblems: " + "; ".join(problems)
         try:
-            send_whatsapp(msg)
+            notify.send(msg, title="Seat watcher daily check-in", priority="low", tags=["calendar"])
             last_hb = today
         except Exception as e:
             problems.append(f"daily check-in failed to send ({e})")
@@ -179,10 +167,11 @@ def main():
     STATE_FILE.write_text(json.dumps(new_state, indent=2, sort_keys=True) + "\n")
 
     if problems:
-        # Fail the run so GitHub emails you; one WhatsApp warning per day at most.
+        # Fail the run so GitHub emails you; one phone warning per day at most.
         if state.get("_last_problem_alert") != today:
             try:
-                send_whatsapp("Seat watcher problem:\n" + "\n".join(problems))
+                notify.send("\n".join(problems), title="Seat watcher problem",
+                            priority="high", tags=["warning"])
             except Exception as e:
                 print(f"Couldn't send problem alert: {e}")
             new_state["_last_problem_alert"] = today
