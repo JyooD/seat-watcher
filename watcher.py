@@ -1,8 +1,9 @@
 """UIUC seat watcher: checks Course Explorer for open seats and sends a phone alert (ntfy).
 
-Reads classes.md, checks each section's enrollment status, and alerts once when a
-section changes from closed to open. State is kept in state.json so you don't get
-spammed every run.
+Reads classes.md, checks each section's enrollment status, and alerts whenever a
+section's status changes (urgent if it just opened). Every 3 hours it also sends a
+health check listing every section's status. State is kept in state.json so you
+only hear about changes, not the same status every run.
 """
 import json
 import os
@@ -21,7 +22,7 @@ STATE_FILE = ROOT / "state.json"
 SCHEDULE = "https://courses.illinois.edu/schedule"
 BANNER = "https://banner.apps.uillinois.edu/StudentRegistrationSSB/ssb/classRegistration/classRegistration"
 HEADERS = {"User-Agent": "uiuc-seat-watcher/1.0"}
-HEARTBEAT_HOUR = 9       # daily check-in after 9am Chicago time
+HEALTH_EVERY_HOURS = 3   # health check at 12am, 3am, 6am, ... Chicago time
 CHECK_EVERY_MIN = 15     # how often cron-job.org triggers a run
 
 # Matches each section row via its "add to favorites" link, which is the
@@ -84,12 +85,12 @@ def is_open(status):
     return s.startswith("open") or s.startswith("crosslistopen")
 
 
-def runs_last_24h():
-    """Count this workflow's runs in the last 24h (None if unavailable)."""
+def runs_since(hours):
+    """Count this workflow's runs in the last `hours` hours (None if unavailable)."""
     token, repo = os.environ.get("GITHUB_TOKEN"), os.environ.get("GITHUB_REPOSITORY")
     if not token or not repo:
         return None
-    since = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    since = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
     url = f"https://api.github.com/repos/{repo}/actions/workflows/watch.yml/runs?created=>={since}&per_page=1"
     req = urllib.request.Request(url, headers={**HEADERS, "Authorization": f"Bearer {token}",
                                                "Accept": "application/vnd.github+json"})
@@ -109,7 +110,7 @@ def main():
 
     year, season, classes = parse_classes()
     state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
-    new_state, alerts, problems, lines = {}, [], [], []
+    new_state, opened, changed, problems, lines = {}, [], [], [], []
 
     for subj, num, crn in classes:
         name = f"{subj} {num}"
@@ -118,7 +119,7 @@ def main():
         except Exception as e:
             print(f"{name}: lookup failed ({e})")
             problems.append(f"{name}: lookup failed")
-            # keep old state so a temporary error doesn't trigger a duplicate alert
+            # keep old state so a temporary error doesn't look like a status change
             new_state.update({k: v for k, v in state.items() if k.startswith(f"{name}|")})
             continue
         if crn and crn not in sections:
@@ -131,36 +132,52 @@ def main():
             key = f"{name}|{c}"
             print(f"{name} sec {label} (CRN {c}): {status}")
             lines.append(f"{name} {label} ({c}): {status}")
+            old = state.get(key)
             if status == "UNKNOWN":
                 problems.append(f"{name} CRN {c}: status UNKNOWN")
-                new_state[key] = state.get(key, "Closed")
+                if old:
+                    new_state[key] = old
                 continue
             new_state[key] = status
-            if is_open(status) and not is_open(state.get(key, "Closed")):
-                alerts.append(f"{name} sec {label} (CRN {c}) is {status}")
+            if old is None:
+                # Newly added to classes.md: only worth an alert if it's already open.
+                if is_open(status):
+                    opened.append(f"{name} sec {label} (CRN {c}): {status}")
+            elif status != old:
+                change = f"{name} sec {label} (CRN {c}): {old} -> {status}"
+                (opened if is_open(status) and not is_open(old) else changed).append(change)
 
-    if alerts:
-        notify.send("\n".join(alerts) + "\nTap to open registration.",
+    # Alert on any status change. A section opening up is urgent; anything else
+    # (closing again, becoming restricted, etc.) is a normal notification.
+    # If sending fails, the run crashes before state is saved, so the next run retries.
+    if opened:
+        notify.send("\n".join(opened + changed) + "\nTap to open registration.",
                     title="Seat open!", priority="urgent", tags=["rotating_light"], click=BANNER)
+    elif changed:
+        notify.send("\n".join(changed), title="Seat status changed",
+                    tags=["arrows_counterclockwise"], click=BANNER)
 
-    # Daily heartbeat: first run on/after 9am Chicago time each day.
+    # Health check: once per 3-hour block (12am, 3am, 6am, ... Chicago time),
+    # listing every section's current status.
     now = datetime.now(ZoneInfo("America/Chicago"))
     today = now.date().isoformat()
-    last_hb = state.get("_last_heartbeat")
-    if now.hour >= HEARTBEAT_HOUR and last_hb != today:
-        runs = runs_last_24h()
+    block = f"{today} {now.hour // HEALTH_EVERY_HOURS * HEALTH_EVERY_HOURS:02d}:00"
+    last_health = state.get("_last_health")
+    if last_health != block:
+        runs = runs_since(HEALTH_EVERY_HOURS)
         msg = "\n".join(lines) or "(no sections checked)"
         if runs is not None:
-            msg += f"\nChecks in last 24h: {runs} (expect ~{24 * 60 // CHECK_EVERY_MIN})"
+            msg += (f"\nChecks in last {HEALTH_EVERY_HOURS}h: {runs} "
+                    f"(expect ~{HEALTH_EVERY_HOURS * 60 // CHECK_EVERY_MIN})")
         if problems:
             msg += "\nProblems: " + "; ".join(problems)
         try:
-            notify.send(msg, title="Seat watcher daily check-in", priority="low", tags=["calendar"])
-            last_hb = today
+            notify.send(msg, title="Seat watcher health check", priority="low", tags=["stethoscope"])
+            last_health = block
         except Exception as e:
-            problems.append(f"daily check-in failed to send ({e})")
-    if last_hb:
-        new_state["_last_heartbeat"] = last_hb
+            problems.append(f"health check failed to send ({e})")
+    if last_health:
+        new_state["_last_health"] = last_health
     if state.get("_last_problem_alert"):
         new_state["_last_problem_alert"] = state["_last_problem_alert"]
 

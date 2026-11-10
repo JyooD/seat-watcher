@@ -13,10 +13,10 @@ You still have to register yourself — this only tells you *when* to.
 - `watcher.py` reads the courses you're watching from `classes.md`, reads
   each course's page on Course Explorer, and compares the current enrollment
   status against the last known status, which it keeps in `state.json`.
-- If a section flips from closed to open, `notify.py` sends you one urgent
-  push notification (tap it to open registration) and the watcher remembers
-  that it already alerted you, so you don't get spammed every run while the
-  seat stays open.
+- Whenever a section's status changes, `notify.py` sends you one push
+  notification (tap it to open registration). A section opening up is sent as
+  **urgent**; other changes (closing again, becoming restricted) are normal
+  notifications. Nothing is sent while a status stays the same.
 - `.github/workflows/watch.yml` is a GitHub Actions workflow that runs
   `watcher.py` every 15 minutes, passing your ntfy topic in as a secret, and commits the updated `state.json` back to
   the repo so state persists between runs.
@@ -59,8 +59,8 @@ Delete a line once you're registered for it so it stops checking.
 
 ## Notes
 
-- You get one alert when a section goes from closed to open, not one every
-  run. If it closes and reopens, you'll be alerted again.
+- You get one alert per status change, not one every run. If a seat opens,
+  closes and reopens, you'll hear about each change.
 - Course Explorer can lag Banner by a bit, so move fast when you get the
   alert — other people are watching too.
 - "Open (Restricted)" also triggers an alert. Check whether the restriction
@@ -108,13 +108,14 @@ hourly-ish backup.
 
 ## Safeguards
 
-- **Daily check-in**: the first run after 9am (Chicago) each day sends a quiet
-  notification with every section's status and how many checks ran in the last 24h (~96 expected).
-  **No check-in by ~9:30am = something is broken.** Check cron-job.org and Actions.
+- **Health check every 3 hours**: the first run in each 3-hour block (12am, 3am, 6am,
+  9am, 12pm, 3pm, 6pm, 9pm Chicago time) sends a quiet notification with every section's
+  status and how many checks ran in the last 3h (~12 expected).
+  **No health check for 3+ hours = something is broken.** Check cron-job.org and Actions.
 - **Problem alerts**: if a class can't be looked up, a CRN isn't found, or a status
   comes back UNKNOWN, the run turns red (GitHub emails you) and you get one phone
   warning per day.
 - **Notification failures**: if ntfy can't be reached or rejects a message, the run
   turns red instead of passing silently.
 - **Token expiry**: when the token expires, cron-job.org starts failing (it emails you)
-  and the check-ins slow to the GitHub backup rate. Make a new token and update the header.
+  and checks slow to the GitHub backup rate. Make a new token and update the header.
